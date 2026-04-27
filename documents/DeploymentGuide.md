@@ -234,13 +234,64 @@ You can customize various deployment settings before running `azd up`, including
 <details>
 <summary><b>Reuse Existing Resources</b></summary>
 
-To optimize costs and integrate with your existing Azure infrastructure, you can configure the solution to reuse compatible resources already deployed in your subscription.
+To optimize costs and integrate with your existing Azure infrastructure, you can configure the solution to reuse compatible resources already deployed in your subscription. Set the environment variables below using `azd env set` **before** running `azd up` or `azd provision`.
 
 **Supported Resources for Reuse:**
 
-- **Log Analytics Workspace:** Integrate with your existing monitoring infrastructure by reusing an established Log Analytics workspace for centralized logging and monitoring. [Configuration Guide](./re-use-log-analytics.md)
+#### Log Analytics Workspace
 
-- **Microsoft Foundry Project:** Leverage your existing Foundry project and deployed models to avoid duplication and reduce provisioning time. [Configuration Guide](./re-use-foundry-project.md)
+Integrate with your existing monitoring infrastructure by reusing an established Log Analytics workspace. 📖 [Step-by-step guide](./re-use-log-analytics.md)
+
+```shell
+azd env set AZURE_ENV_EXISTING_LOG_ANALYTICS_WORKSPACE_RID '<full-resource-id>'
+```
+
+> **How to find the Resource ID:** In the [Azure Portal](https://portal.azure.com/), navigate to your Log Analytics workspace → **Overview** → **JSON View**, and copy the **Resource ID**.
+
+#### Microsoft Foundry Project
+
+Leverage your existing Foundry project and deployed models to avoid duplication and reduce provisioning time. 📖 [Step-by-step guide](./re-use-foundry-project.md)
+
+```shell
+azd env set AZURE_EXISTING_AIPROJECT_RESOURCE_ID '<full-resource-id>'
+```
+
+> **How to find the Resource ID:** In the [Azure Portal](https://portal.azure.com/), navigate to your Microsoft Foundry service → **Resource Management** → **Projects** → click the project → **Properties**, and copy the **Resource ID**.
+
+#### Azure AI Search
+
+Reuse an existing Azure AI Search service instead of creating a new one. Both parameters must be set together.
+
+```shell
+azd env set AZURE_EXISTING_AI_SEARCH_RG '<resource-group-name>'
+azd env set AZURE_EXISTING_AI_SEARCH_NAME '<search-service-name>'
+```
+
+> **How to find the values:** In the [Azure Portal](https://portal.azure.com/), navigate to your AI Search service → **Overview**. The **Name** is shown at the top of the page and the **Resource group** is listed in the essentials section.
+
+#### Azure SQL Server & Database
+
+Reuse an existing Azure SQL Server and optionally an existing database. All three parameters should be set together.
+
+```shell
+azd env set AZURE_EXISTING_SQL_SERVER_RG '<resource-group-name>'
+azd env set AZURE_EXISTING_SQL_SERVER_NAME '<sql-server-name>'
+azd env set AZURE_EXISTING_SQL_DATABASE_NAME '<database-name>'
+```
+
+> **How to find the values:** In the [Azure Portal](https://portal.azure.com/), navigate to your SQL Server → **Overview**. The **Server name** (without `.database.windows.net`), **Resource group**, and linked **Database name** are all visible on the overview page.
+
+#### Quick Reference — All Environment Variables
+
+| Environment Variable | Resource | Required Value |
+|---|---|---|
+| `AZURE_ENV_EXISTING_LOG_ANALYTICS_WORKSPACE_RID` | Log Analytics Workspace | Full Resource ID |
+| `AZURE_EXISTING_AIPROJECT_RESOURCE_ID` | Microsoft Foundry Project | Full Resource ID |
+| `AZURE_EXISTING_AI_SEARCH_RG` | Azure AI Search | Resource group name |
+| `AZURE_EXISTING_AI_SEARCH_NAME` | Azure AI Search | Service name |
+| `AZURE_EXISTING_SQL_SERVER_RG` | Azure SQL Server | Resource group name |
+| `AZURE_EXISTING_SQL_SERVER_NAME` | Azure SQL Server | Server name |
+| `AZURE_EXISTING_SQL_DATABASE_NAME` | Azure SQL Database | Database name |
 
 **Key Benefits:**
 - **Cost Optimization:** Eliminate duplicate resource charges
@@ -252,6 +303,7 @@ To optimize costs and integrate with your existing Azure infrastructure, you can
 - Ensure existing resources meet the solution's requirements and are in compatible regions
 - Review access permissions and configurations before reusing resources
 - Consider the impact on existing workloads when sharing resources
+- Azure AI Search and Azure SQL reuse parameters are only supported with the **Development/Testing** deployment type (default `main.parameters.json`). Log Analytics and Foundry Project reuse are supported in both deployment types.
 
 </details>
 

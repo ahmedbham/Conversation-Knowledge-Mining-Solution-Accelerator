@@ -155,6 +155,21 @@ param existingLogAnalyticsWorkspaceId string = ''
 @description('Optional. Use this parameter to use an existing AI project resource ID')
 param existingAiFoundryAiProjectResourceId string = ''
 
+@description('Optional. Resource group name of an existing Azure AI Search service to reuse instead of creating a new one.')
+param existingAiSearchResourceGroupName string = ''
+
+@description('Optional. Name of an existing Azure AI Search service to reuse instead of creating a new one.')
+param existingAiSearchName string = ''
+
+@description('Optional. Resource group name of an existing Azure SQL Server to reuse instead of creating a new one.')
+param existingSqlServerResourceGroupName string = ''
+
+@description('Optional. Name of an existing Azure SQL Server to reuse instead of creating a new one.')
+param existingSqlServerName string = ''
+
+@description('Optional. Name of an existing SQL Database on the existing SQL Server to reuse instead of creating a new one.')
+param existingSqlDatabaseName string = ''
+
 @description('Optional. Created by user name.')
 param createdBy string = contains(deployer(), 'userPrincipalName')? split(deployer().userPrincipalName, '@')[0]: deployer().objectId
 
@@ -763,10 +778,12 @@ module cognitiveServicesCuPrivateEndpoint 'br/public:avm/res/network/private-end
 
 // ========== AVM WAF ========== //
 // ========== AI Foundry: AI Search ========== //
-var aiSearchName = 'srch-${solutionSuffix}'
+var useExistingAiSearch = !empty(existingAiSearchName)
+var aiSearchName = useExistingAiSearch ? existingAiSearchName : 'srch-${solutionSuffix}'
+var aiSearchResourceGroupName = useExistingAiSearch ? existingAiSearchResourceGroupName : resourceGroup().name
 var aiSearchConnectionName = 'foundry-search-connection-${solutionSuffix}'
 
-resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
+resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = if (!useExistingAiSearch) {
   name: aiSearchName
   location: location
   sku: {
@@ -774,8 +791,14 @@ resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
   }
 }
 
+// Reference to existing AI Search service in external resource group
+resource existingSearchService 'Microsoft.Search/searchServices@2024-06-01-preview' existing = if (useExistingAiSearch) {
+  name: existingAiSearchName
+  scope: resourceGroup(aiSearchResourceGroupName)
+}
+
 // Separate module for Search Service to enable managed identity and update other properties, as this reduces deployment time
-module searchServiceUpdate 'br/public:avm/res/search/search-service:0.12.0' = {
+module searchServiceUpdate 'br/public:avm/res/search/search-service:0.12.0' = if (!useExistingAiSearch) {
   name: take('avm.res.search.enable-identity.${aiSearchName}', 64)
   params: {
     // Required parameters
@@ -862,12 +885,93 @@ module searchServiceUpdate 'br/public:avm/res/search/search-service:0.12.0' = {
 }
 
 // ========== Search Service to AI Services Role Assignment ========== //
-resource searchServiceToAiServicesRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!useExistingAiFoundryAiProject) {
+// Computed search service identity principal ID — from new or existing search
+var searchServiceSystemMIPrincipalId = useExistingAiSearch
+  ? existingSearchService.identity.principalId
+  : searchServiceUpdate.outputs.systemAssignedMIPrincipalId!
+
+// Computed search service resource ID and location — from new or existing search
+var searchServiceResourceId = useExistingAiSearch ? existingSearchService.id : searchService.id
+var searchServiceLocation = useExistingAiSearch ? existingSearchService.location : searchService.location
+
+resource searchServiceToAiServicesRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!useExistingAiFoundryAiProject && !useExistingAiSearch) {
   name: guid(aiSearchName, '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd', aiFoundryAiServicesResourceName)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd') // Cognitive Services OpenAI User
-    principalId: searchServiceUpdate.outputs.systemAssignedMIPrincipalId!
+    principalId: searchServiceSystemMIPrincipalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// ========== Role assignments on existing AI Search ========== //
+// When using an existing AI Search in a different RG, deploy scoped role assignments via module
+module existingSearchRoleAssignment_userMI_searchContributor 'modules/search-role-assignment.bicep' = if (useExistingAiSearch) {
+  name: 'existingSearch-userMI-searchContributor'
+  scope: resourceGroup(aiSearchResourceGroupName)
+  params: {
+    searchServiceName: aiSearchName
+    principalId: userAssignedIdentity.outputs.principalId
+    roleDefinitionId: '7ca78c08-252a-4471-8644-bb5ff32d4ba0' // Search Service Contributor
+  }
+}
+
+module existingSearchRoleAssignment_userMI_openaiUser 'modules/search-role-assignment.bicep' = if (useExistingAiSearch) {
+  name: 'existingSearch-userMI-openaiUser'
+  scope: resourceGroup(aiSearchResourceGroupName)
+  params: {
+    searchServiceName: aiSearchName
+    principalId: userAssignedIdentity.outputs.principalId
+    roleDefinitionId: '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd' // Cognitive Services OpenAI User
+  }
+}
+
+module existingSearchRoleAssignment_userMI_indexDataContributor 'modules/search-role-assignment.bicep' = if (useExistingAiSearch) {
+  name: 'existingSearch-userMI-indexDataContributor'
+  scope: resourceGroup(aiSearchResourceGroupName)
+  params: {
+    searchServiceName: aiSearchName
+    principalId: userAssignedIdentity.outputs.principalId
+    roleDefinitionId: '8ebe5a00-799e-43f5-93ac-243d3dce84a7' // Search Index Data Contributor
+  }
+}
+
+module existingSearchRoleAssignment_userMI_indexDataReader 'modules/search-role-assignment.bicep' = if (useExistingAiSearch) {
+  name: 'existingSearch-userMI-indexDataReader'
+  scope: resourceGroup(aiSearchResourceGroupName)
+  params: {
+    searchServiceName: aiSearchName
+    principalId: userAssignedIdentity.outputs.principalId
+    roleDefinitionId: '1407120a-92aa-4202-b7e9-c0e197c71c8f' // Search Index Data Reader
+  }
+}
+
+module existingSearchRoleAssignment_backendMI_indexDataReader 'modules/search-role-assignment.bicep' = if (useExistingAiSearch) {
+  name: 'existingSearch-backendMI-indexDataReader'
+  scope: resourceGroup(aiSearchResourceGroupName)
+  params: {
+    searchServiceName: aiSearchName
+    principalId: backendUserAssignedIdentity.outputs.principalId
+    roleDefinitionId: '1407120a-92aa-4202-b7e9-c0e197c71c8f' // Search Index Data Reader
+  }
+}
+
+module existingSearchRoleAssignment_projectMI_indexDataReader 'modules/search-role-assignment.bicep' = if (useExistingAiSearch) {
+  name: 'existingSearch-projectMI-indexDataReader'
+  scope: resourceGroup(aiSearchResourceGroupName)
+  params: {
+    searchServiceName: aiSearchName
+    principalId: !useExistingAiFoundryAiProject ? aiFoundryAiServices.outputs.aiProjectInfo.aiprojectSystemAssignedMIPrincipalId : existingAiFoundryAiServicesProject!.identity.principalId
+    roleDefinitionId: '1407120a-92aa-4202-b7e9-c0e197c71c8f' // Search Index Data Reader
+  }
+}
+
+module existingSearchRoleAssignment_projectMI_searchContributor 'modules/search-role-assignment.bicep' = if (useExistingAiSearch) {
+  name: 'existingSearch-projectMI-searchContributor'
+  scope: resourceGroup(aiSearchResourceGroupName)
+  params: {
+    searchServiceName: aiSearchName
+    principalId: !useExistingAiFoundryAiProject ? aiFoundryAiServices.outputs.aiProjectInfo.aiprojectSystemAssignedMIPrincipalId : existingAiFoundryAiServicesProject!.identity.principalId
+    roleDefinitionId: '7ca78c08-252a-4471-8644-bb5ff32d4ba0' // Search Service Contributor
   }
 }
 
@@ -880,8 +984,8 @@ resource projectAISearchConnection 'Microsoft.CognitiveServices/accounts/project
     isSharedToAll: true
     metadata: {
       ApiType: 'Azure'
-      ResourceId: searchService.id
-      location: searchService.location
+      ResourceId: searchServiceResourceId
+      location: searchServiceLocation
     }
   }
   dependsOn: [
@@ -896,20 +1000,31 @@ module existing_AIProject_SearchConnectionModule 'modules/deploy_aifp_aisearch_c
     existingAIProjectName: aiFoundryAiProjectResourceName
     existingAIFoundryName: aiFoundryAiServicesResourceName
     aiSearchName: aiSearchName
-    aiSearchResourceId: searchService.id
-    aiSearchLocation: searchService.location
+    aiSearchResourceId: searchServiceResourceId
+    aiSearchLocation: searchServiceLocation
     aiSearchConnectionName: aiSearchConnectionName
   }
 }
 
-// Role assignment for existing AI Services scenario
-module searchServiceToExistingAiServicesRoleAssignment 'modules/role-assignment.bicep' = if (useExistingAiFoundryAiProject) {
+// Role assignment for existing AI Services scenario — search service MI needs OpenAI User on AI Services
+module searchServiceToExistingAiServicesRoleAssignment 'modules/role-assignment.bicep' = if (useExistingAiFoundryAiProject && !useExistingAiSearch) {
   name: 'searchToExistingAiServices-roleAssignment'
   scope: resourceGroup(aiFoundryAiServicesSubscriptionId, aiFoundryAiServicesResourceGroupName)
   params: {
-    principalId: searchServiceUpdate.outputs.systemAssignedMIPrincipalId!
+    principalId: searchServiceSystemMIPrincipalId
     roleDefinitionId: '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd' // Cognitive Services OpenAI User
     targetResourceName: aiFoundryAiServices.outputs.name
+  }
+}
+
+// Role assignment for existing AI Services + existing AI Search scenario
+module searchServiceToExistingAiServicesRoleAssignment_existingSearch 'modules/role-assignment.bicep' = if (useExistingAiFoundryAiProject && useExistingAiSearch) {
+  name: 'existingSearchToExistingAiServices-roleAssignment'
+  scope: resourceGroup(aiFoundryAiServicesSubscriptionId, aiFoundryAiServicesResourceGroupName)
+  params: {
+    principalId: searchServiceSystemMIPrincipalId
+    roleDefinitionId: '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd' // Cognitive Services OpenAI User
+    targetResourceName: existingAIServicesName
   }
 }
 
@@ -1116,9 +1231,18 @@ module cosmosDb 'br/public:avm/res/document-db/database-account:0.18.0' = {
 }
 
 //========== SQL Database module ========== //
-var sqlServerResourceName = 'sql-${solutionSuffix}'
-var sqlDbModuleName = 'sqldb-${solutionSuffix}'
-module sqlDBModule 'br/public:avm/res/sql/server:0.21.1' = {
+var useExistingSql = !empty(existingSqlServerName)
+var sqlServerResourceName = useExistingSql ? existingSqlServerName : 'sql-${solutionSuffix}'
+var sqlDbModuleName = useExistingSql ? existingSqlDatabaseName : 'sqldb-${solutionSuffix}'
+var sqlServerResourceGroupName = useExistingSql ? existingSqlServerResourceGroupName : resourceGroup().name
+
+// Reference to existing SQL Server in external resource group
+resource existingSqlServer 'Microsoft.Sql/servers@2023-08-01-preview' existing = if (useExistingSql) {
+  name: existingSqlServerName
+  scope: resourceGroup(sqlServerResourceGroupName)
+}
+
+module sqlDBModule 'br/public:avm/res/sql/server:0.21.1' = if (!useExistingSql) {
   name: take('avm.res.sql.server.${sqlServerResourceName}', 64)
   params: {
     // Required parameters
@@ -1183,7 +1307,7 @@ module sqlDBModule 'br/public:avm/res/sql/server:0.21.1' = {
 }
 
 // ========== SQL Server Private Endpoint (separated) ========== //
-module sqlDbPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.11.1' = if (enablePrivateNetworking) {
+module sqlDbPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.11.1' = if (enablePrivateNetworking && !useExistingSql) {
   name: take('avm.res.network.private-endpoint.sql-${solutionSuffix}', 64)
   params: {
     name: 'pep-sql-${solutionSuffix}'
@@ -1299,6 +1423,11 @@ var reactAppLayoutConfig = '''{
 }'''
 
 // ========== Web App module ========== //
+// Computed SQL server FQDN — from new or existing SQL
+var sqlServerFqdn = useExistingSql
+  ? '${existingSqlServerName}${environment().suffixes.sqlServerHostname}'
+  : '${sqlDBModule.outputs.name}${environment().suffixes.sqlServerHostname}'
+
 var backendWebSiteResourceName = 'api-${solutionSuffix}'
 module webSiteBackend 'modules/web-sites.bicep' = {
   name: take('module.web-sites.${backendWebSiteResourceName}', 64)
@@ -1335,8 +1464,8 @@ module webSiteBackend 'modules/web-sites.bicep' = {
           AZURE_COSMOSDB_CONVERSATIONS_CONTAINER: collectionName
           AZURE_COSMOSDB_DATABASE: cosmosDbDatabaseName
           AZURE_COSMOSDB_ENABLE_FEEDBACK: 'True'
-          SQLDB_DATABASE: 'sqldb-${solutionSuffix}'
-          SQLDB_SERVER: '${sqlDBModule.outputs.name }${environment().suffixes.sqlServerHostname}'
+          SQLDB_DATABASE: sqlDbModuleName
+          SQLDB_SERVER: sqlServerFqdn
           SQLDB_USER_MID: backendUserAssignedIdentity.outputs.clientId
           AZURE_AI_SEARCH_ENDPOINT: 'https://${aiSearchName}.search.windows.net'
           AZURE_AI_SEARCH_INDEX: 'call_transcripts_index'
@@ -1484,10 +1613,10 @@ output AZURE_OPENAI_RESOURCE string = aiFoundryAiServices.outputs.name
 output REACT_APP_LAYOUT_CONFIG string = reactAppLayoutConfig
 
 @description('Contains SQL database name.')
-output SQLDB_DATABASE string = 'sqldb-${solutionSuffix}'
+output SQLDB_DATABASE string = sqlDbModuleName
 
 @description('Contains SQL server name.')
-output SQLDB_SERVER string = '${sqlDBModule.outputs.name }${environment().suffixes.sqlServerHostname}'
+output SQLDB_SERVER string = sqlServerFqdn
 
 @description('Display name of the backend API user-assigned managed identity (also used for SQL database access).')
 output BACKEND_USER_MID_NAME string = backendUserAssignedIdentity.outputs.name

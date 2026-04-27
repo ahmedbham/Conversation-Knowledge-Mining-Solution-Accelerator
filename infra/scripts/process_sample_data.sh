@@ -52,6 +52,10 @@ cu_account_resource_id=""
 original_sql_public_access=""
 created_sql_allow_all_firewall_rule="false"
 original_full_range_rule_present="false"
+# SQL Server resource group (may differ from main resource group for existing SQL servers)
+sqlResourceGroupName=""
+# AI Search resource group (may differ from main resource group for existing AI Search services)
+searchResourceGroupName=""
 
 # Function to enable public network access temporarily
 enable_public_access() {
@@ -163,7 +167,7 @@ enable_public_access() {
 	# Enable public access for SQL Server
 	original_sql_public_access=$(az sql server show \
 		--name "$sqlServerName" \
-		--resource-group "$resourceGroupName" \
+		--resource-group "$sqlResourceGroupName" \
 		--query "publicNetworkAccess" \
 		-o tsv)
 	
@@ -171,7 +175,7 @@ enable_public_access() {
 		echo "✓ Enabling SQL Server public access"
 		az sql server update \
 			--name "$sqlServerName" \
-			--resource-group "$resourceGroupName" \
+			--resource-group "$sqlResourceGroupName" \
 			--enable-public-network true \
 			--output none
 		if [ $? -ne 0 ]; then
@@ -186,7 +190,7 @@ enable_public_access() {
 	# Check if there's already a rule allowing full IP range to avoid creating a duplicate
 	pre_existing_full_range_rule=$(az sql server firewall-rule list \
 	    --server "$sqlServerName" \
-	    --resource-group "$resourceGroupName" \
+	    --resource-group "$sqlResourceGroupName" \
 	    --query "[?startIpAddress=='0.0.0.0' && endIpAddress=='255.255.255.255'] | [0].name" \
 	    -o tsv 2>/dev/null)
 	
@@ -196,14 +200,14 @@ enable_public_access() {
 	
 	existing_allow_all_rule=$(az sql server firewall-rule list \
 	    --server "$sqlServerName" \
-	    --resource-group "$resourceGroupName" \
+	    --resource-group "$sqlResourceGroupName" \
 	    --query "[?name=='${sql_allow_all_rule_name}'] | [0].name" \
 	    -o tsv 2>/dev/null)
 	
 	if [ -z "$existing_allow_all_rule" ] && [ -z "$pre_existing_full_range_rule" ]; then
 		echo "✓ Creating temporary SQL firewall rule"
 		if az sql server firewall-rule create \
-			--resource-group "$resourceGroupName" \
+			--resource-group "$sqlResourceGroupName" \
 			--server "$sqlServerName" \
 			--name "$sql_allow_all_rule_name" \
 			--start-ip-address 0.0.0.0 \
@@ -295,7 +299,7 @@ restore_network_access() {
 		esac
 		az sql server update \
 			--name "$sqlServerName" \
-			--resource-group "$resourceGroupName" \
+			--resource-group "$sqlResourceGroupName" \
 			--enable-public-network $restore_value \
 			--output none
 		if [ $? -ne 0 ]; then
@@ -354,6 +358,18 @@ get_values_from_azd_env() {
 	# Strip FQDN suffix from SQL server name if present (Azure CLI needs just the server name)
 	sqlServerName="${sqlServerName%.database.windows.net}"
 	
+	# Get SQL resource group (may differ from main resource group for existing SQL servers)
+	sqlResourceGroupName=$(azd env get-value AZURE_EXISTING_SQL_SERVER_RG 2>&1 | grep -E '^[a-zA-Z0-9._/-]+$')
+	if [ -z "$sqlResourceGroupName" ]; then
+		sqlResourceGroupName="$resourceGroupName"
+	fi
+	
+	# Get AI Search resource group (may differ from main resource group for existing AI Search services)
+	searchResourceGroupName=$(azd env get-value AZURE_EXISTING_AI_SEARCH_RG 2>&1 | grep -E '^[a-zA-Z0-9._/-]+$')
+	if [ -z "$searchResourceGroupName" ]; then
+		searchResourceGroupName="$resourceGroupName"
+	fi
+	
 	# Validate that we extracted all required values
 	if [ -z "$resourceGroupName" ] || [ -z "$storageAccountName" ] || [ -z "$fileSystem" ] || [ -z "$sqlServerName" ] || [ -z "$SqlDatabaseName" ] || [ -z "$backendUserMidClientId" ] || [ -z "$backendUserMidDisplayName" ] || [ -z "$aiSearchName" ] || [ -z "$aif_resource_id" ] || [ -z "$usecase" ] || [ -z "$solutionName" ]; then
 		echo "Error: One or more required values could not be retrieved from azd environment."
@@ -411,6 +427,18 @@ get_values_from_az_deployment() {
 	
 	# Strip FQDN suffix from SQL server name if present (Azure CLI needs just the server name)
 	sqlServerName="${sqlServerName%.database.windows.net}"
+	
+	# SQL resource group: try to extract from deployment outputs, fall back to main resource group
+	sqlResourceGroupName=$(extract_value "sqlServerResourceGroup" "AZURE_EXISTING_SQL_SERVER_RG")
+	if [ -z "$sqlResourceGroupName" ]; then
+		sqlResourceGroupName="$resourceGroupName"
+	fi
+	
+	# AI Search resource group: try to extract from deployment outputs, fall back to main resource group
+	searchResourceGroupName=$(extract_value "searchResourceGroup" "AZURE_EXISTING_AI_SEARCH_RG")
+	if [ -z "$searchResourceGroupName" ]; then
+		searchResourceGroupName="$resourceGroupName"
+	fi
 	
 	# Define required values with their display names for error reporting
 	declare -A required_values=(
@@ -529,6 +557,13 @@ if [ -n "$resourceGroupName" ] && [ -n "$azSubscriptionId" ] && [ -n "$storageAc
     echo "All parameters provided via command line."
     # Strip FQDN suffix from SQL server name if present
     sqlServerName="${sqlServerName%.database.windows.net}"
+    # Default SQL resource group to main resource group if not set
+    if [ -z "$sqlResourceGroupName" ]; then
+        sqlResourceGroupName="$resourceGroupName"
+    fi
+    if [ -z "$searchResourceGroupName" ]; then
+        searchResourceGroupName="$resourceGroupName"
+    fi
 elif [ -z "$resourceGroupName" ]; then
     # No resource group provided - use azd env
     if ! get_values_from_azd_env; then
@@ -607,7 +642,7 @@ echo "copy_kb_files.sh completed successfully."
 # Call run_create_index_scripts.sh
 echo "Running run_create_index_scripts.sh"
 # Pass all required environment variables and backend managed identity info for role assignment
-bash "$SCRIPT_DIR/run_create_index_scripts.sh" "$resourceGroupName" "$aiSearchName" "$searchEndpoint" "$sqlServerName" "$SqlDatabaseName" "$backendUserMidDisplayName" "$backendUserMidClientId" "$storageAccountName" "$openaiEndpoint" "$deploymentModel" "$embeddingModel" "$cuEndpoint" "$cuApiVersion" "$aif_resource_id" "$cu_foundry_resource_id" "$aiAgentEndpoint" "$usecase" "$solutionName"
+bash "$SCRIPT_DIR/run_create_index_scripts.sh" "$resourceGroupName" "$aiSearchName" "$searchEndpoint" "$sqlServerName" "$SqlDatabaseName" "$backendUserMidDisplayName" "$backendUserMidClientId" "$storageAccountName" "$openaiEndpoint" "$deploymentModel" "$embeddingModel" "$cuEndpoint" "$cuApiVersion" "$aif_resource_id" "$cu_foundry_resource_id" "$aiAgentEndpoint" "$usecase" "$solutionName" "$sqlResourceGroupName" "$searchResourceGroupName"
 if [ $? -ne 0 ]; then
 	echo "Error: run_create_index_scripts.sh failed."
 	exit 1

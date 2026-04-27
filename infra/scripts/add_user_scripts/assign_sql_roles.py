@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 import struct
+import time
 import uuid
 import pyodbc
 from azure.identity import AzureCliCredential
@@ -43,17 +44,22 @@ def connect_with_token(server: str, database: str, credential: AzureCliCredentia
         pyodbc.Connection: Database connection object
         
     Raises:
-        RuntimeError: If unable to connect with available ODBC drivers
+        RuntimeError: If unable to connect after retries
     """
-    token_bytes = credential.get_token("https://database.windows.net/.default").token.encode("utf-16-le")
-    token_struct = struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
-    for driver in ["{ODBC Driver 18 for SQL Server}", "{ODBC Driver 17 for SQL Server}"]:
+    driver = "{ODBC Driver 18 for SQL Server}"
+    max_retries = 6
+    for attempt in range(1, max_retries + 1):
         try:
+            token_bytes = credential.get_token("https://database.windows.net/.default").token.encode("utf-16-le")
+            token_struct = struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
             conn_str = f"DRIVER={driver};SERVER={server};DATABASE={database};"
             return pyodbc.connect(conn_str, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct})
-        except pyodbc.Error:
-            continue
-    raise RuntimeError("Unable to connect using ODBC Driver 18 or 17. Install driver msodbcsql17/18.")
+        except pyodbc.Error as e:
+            if attempt == max_retries:
+                raise RuntimeError(f"Failed to connect to SQL Server after {max_retries} attempts: {e}") from e
+            wait = 10 * (2 ** (attempt - 1))  # 10, 20, 40, 80, 160, 320s
+            print(f"\u23f3 SQL connection attempt {attempt}/{max_retries} failed, retrying in {wait}s... ({e})")
+            time.sleep(wait)
 
 
 def assign_sql_roles(server, database, roles_json):

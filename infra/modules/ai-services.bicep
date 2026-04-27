@@ -296,7 +296,7 @@ output endpoint string = useExistingService ? cognitiveServiceExisting!.properti
 output endpoints endpointType = useExistingService ? cognitiveServiceExisting!.properties.endpoints : cognitiveService.properties.endpoints
 
 @description('The principal ID of the system assigned identity.')
-output systemAssignedMIPrincipalId string? = useExistingService ? cognitiveServiceExisting!.identity.principalId : cognitiveService.?identity.?principalId
+output systemAssignedMIPrincipalId string? = useExistingService ? cognitiveServiceExisting!.identity.?principalId : cognitiveService.?identity.?principalId
 
 @description('The location the resource was deployed into.')
 output location string = useExistingService ? cognitiveServiceExisting!.location : cognitiveService.location

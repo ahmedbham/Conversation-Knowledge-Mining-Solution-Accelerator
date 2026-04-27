@@ -22,6 +22,8 @@ cu_foundry_resource_id="${15}"
 ai_agent_endpoint="${16}"
 usecase="${17}"
 solution_name="${18}"
+sqlResourceGroupName="${19:-$resourceGroupName}"
+searchResourceGroupName="${20:-$resourceGroupName}"
 
 pythonScriptPath="$SCRIPT_DIR/index_scripts/"
 
@@ -100,7 +102,19 @@ if [ -n "$cu_foundry_resource_id" ] && [ "$cu_foundry_resource_id" != "null" ]; 
 fi
 
 ### Assign Search Index Data Contributor role to the signed in user ###
-search_resource_id=$(az search service show --name $aiSearchName --resource-group $resourceGroupName --query id --output tsv)
+search_resource_id=$(az search service show --name $aiSearchName --resource-group $searchResourceGroupName --query id --output tsv)
+
+### Ensure search service accepts RBAC (AAD) authentication for data plane operations ###
+search_auth=$(az search service show --name $aiSearchName --resource-group $searchResourceGroupName --query "authOptions.apiKeyOnly" -o tsv 2>/dev/null)
+if [ -n "$search_auth" ]; then
+    echo "✓ Enabling RBAC data plane auth on search service"
+    az search service update --name "$aiSearchName" --resource-group "$searchResourceGroupName" \
+        --aad-auth-failure-mode http401WithBearerChallenge --auth-options aadOrApiKey --output none
+    if [ $? -ne 0 ]; then
+        echo "✗ Failed to enable RBAC auth on search service"
+        exit 1
+    fi
+fi
 
 role_assignment=$(MSYS_NO_PATHCONV=1 az role assignment list --assignee $signed_user_id --role "Search Index Data Contributor" --scope $search_resource_id --query "[].roleDefinitionId" -o tsv)
 if [ -z "$role_assignment" ]; then
@@ -112,14 +126,25 @@ if [ -z "$role_assignment" ]; then
     fi
 fi
 
+### Assign Search Service Contributor role to the signed in user (required for index schema operations) ###
+role_assignment=$(MSYS_NO_PATHCONV=1 az role assignment list --assignee $signed_user_id --role "Search Service Contributor" --scope $search_resource_id --query "[].roleDefinitionId" -o tsv)
+if [ -z "$role_assignment" ]; then
+    echo "✓ Assigning Search Service Contributor role"
+    MSYS_NO_PATHCONV=1 az role assignment create --assignee $signed_user_id --role "Search Service Contributor" --scope $search_resource_id --output none
+    if [ $? -ne 0 ]; then
+        echo "✗ Failed to assign Search Service Contributor role"
+        exit 1
+    fi
+fi
+
 
 ### Assign signed in user as SQL Server Admin ###
-sql_server_resource_id=$(az sql server show --name $sqlServerName --resource-group $resourceGroupName --query id --output tsv)
+sql_server_resource_id=$(az sql server show --name $sqlServerName --resource-group $sqlResourceGroupName --query id --output tsv)
 admin=$(MSYS_NO_PATHCONV=1 az sql server ad-admin list --ids $sql_server_resource_id --query "[?sid == '$signed_user_id']" -o tsv)
 
 if [ -z "$admin" ]; then
     echo "✓ Assigning user as SQL Server Admin"
-    MSYS_NO_PATHCONV=1 az sql server ad-admin create --display-name "$signed_user_display_name" --object-id $signed_user_id --resource-group $resourceGroupName --server $sqlServerName --output none
+    MSYS_NO_PATHCONV=1 az sql server ad-admin create --display-name "$signed_user_display_name" --object-id $signed_user_id --resource-group $sqlResourceGroupName --server $sqlServerName --output none
     if [ $? -ne 0 ]; then
         echo "✗ Failed to assign SQL Server Admin role"
         exit 1
@@ -132,6 +157,24 @@ pip install --quiet -r ${pythonScriptPath}requirements.txt
 if [ $? -ne 0 ]; then
     echo "Error: Failed to install Python requirements."
     exit 1
+fi
+
+# Wait for search role assignments to propagate by testing index list access
+echo "⏳ Waiting for search role assignments to propagate..."
+max_retries=30
+retry_count=0
+while [ $retry_count -lt $max_retries ]; do
+    if az search index list --service-name "$aiSearchName" --resource-group "$searchResourceGroupName" --output none 2>/dev/null; then
+        echo "✓ Search role assignments propagated successfully"
+        break
+    fi
+    retry_count=$((retry_count + 1))
+    echo "  Attempt $retry_count/$max_retries - waiting 10 seconds..."
+    sleep 10
+done
+
+if [ $retry_count -eq $max_retries ]; then
+    echo "⚠ Search role propagation check timed out, proceeding anyway..."
 fi
 
 error_flag=false
