@@ -37,6 +37,19 @@ class Config:
         self.azure_cosmosdb_conversations_container = os.getenv("AZURE_COSMOSDB_CONVERSATIONS_CONTAINER")
         self.azure_cosmosdb_enable_feedback = os.getenv("AZURE_COSMOSDB_ENABLE_FEEDBACK", "false").lower() == "true"
 
+        # Chat history backend selection: "cosmosdb" (default) or "postgresql"
+        self.chat_history_backend = os.getenv("CHAT_HISTORY_BACKEND", "cosmosdb").strip().lower()
+
+        # PostgreSQL configuration (used when CHAT_HISTORY_BACKEND=postgresql)
+        self.postgresql_host = os.getenv("POSTGRESQL_HOST")
+        self.postgresql_port = int(os.getenv("POSTGRESQL_PORT", "5432"))
+        self.postgresql_database = os.getenv("POSTGRESQL_DATABASE")
+        self.postgresql_user = os.getenv("POSTGRESQL_USER")
+        self.postgresql_password = os.getenv("POSTGRESQL_PASSWORD")
+        self.postgresql_enable_feedback = os.getenv(
+            "POSTGRESQL_ENABLE_FEEDBACK", "false"
+        ).lower() == "true"
+
         self.solution_name = os.getenv("SOLUTION_NAME", "")
         self.azure_client_id = os.getenv("AZURE_CLIENT_ID", "")
 
