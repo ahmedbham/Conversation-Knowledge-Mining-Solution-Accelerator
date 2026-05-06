@@ -249,34 +249,62 @@ class PostgreSQLConversationClient:
         sort_order: str = "DESC",
         offset: int = 0,
     ) -> list:
-        sort_order = "DESC" if sort_order.upper() != "ASC" else "ASC"
+        # Use an explicit conditional to prevent any SQL injection via sort_order
+        order_clause = "ASC" if sort_order.upper() == "ASC" else "DESC"
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             if limit is not None:
-                rows = await conn.fetch(
-                    f"""
-                    SELECT id, user_id, title, created_at, updated_at
-                    FROM conversations
-                    WHERE user_id = $1
-                    ORDER BY updated_at {sort_order}
-                    LIMIT $2 OFFSET $3
-                    """,
-                    user_id,
-                    limit,
-                    offset,
-                )
+                if order_clause == "ASC":
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, user_id, title, created_at, updated_at
+                        FROM conversations
+                        WHERE user_id = $1
+                        ORDER BY updated_at ASC
+                        LIMIT $2 OFFSET $3
+                        """,
+                        user_id,
+                        limit,
+                        offset,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, user_id, title, created_at, updated_at
+                        FROM conversations
+                        WHERE user_id = $1
+                        ORDER BY updated_at DESC
+                        LIMIT $2 OFFSET $3
+                        """,
+                        user_id,
+                        limit,
+                        offset,
+                    )
             else:
-                rows = await conn.fetch(
-                    f"""
-                    SELECT id, user_id, title, created_at, updated_at
-                    FROM conversations
-                    WHERE user_id = $1
-                    ORDER BY updated_at {sort_order}
-                    OFFSET $2
-                    """,
-                    user_id,
-                    offset,
-                )
+                if order_clause == "ASC":
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, user_id, title, created_at, updated_at
+                        FROM conversations
+                        WHERE user_id = $1
+                        ORDER BY updated_at ASC
+                        OFFSET $2
+                        """,
+                        user_id,
+                        offset,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, user_id, title, created_at, updated_at
+                        FROM conversations
+                        WHERE user_id = $1
+                        ORDER BY updated_at DESC
+                        OFFSET $2
+                        """,
+                        user_id,
+                        offset,
+                    )
         return [self._row_to_conversation(r) for r in rows]
 
     async def get_conversation(self, user_id: str, conversation_id: str) -> dict | None:
