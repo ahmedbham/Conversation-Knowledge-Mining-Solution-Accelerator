@@ -605,7 +605,7 @@ class TestHistoryService:
         
         mock_cosmos_client = AsyncMock()
         mock_cosmos_client.get_conversation = AsyncMock(
-            return_value={"id": conversation_id, "user_id": user_id}
+            return_value={"id": conversation_id, "userId": user_id}
         )
         mock_cosmos_client.delete_messages = AsyncMock()
         
@@ -645,7 +645,7 @@ class TestHistoryService:
 
         mock_cosmos_client = AsyncMock()
         mock_cosmos_client.get_conversation = AsyncMock(
-            return_value={"id": conversation_id, "user_id": different_user_id}
+            return_value={"id": conversation_id, "userId": different_user_id}
         )
 
         with patch.object(history_service, "init_cosmosdb_client", return_value=mock_cosmos_client):
@@ -692,3 +692,139 @@ class TestHistoryService:
             assert success is False
             assert error == "Test database connection error"
             mock_cosmos_client.ensure.assert_awaited_once()
+
+# ---------------------------------------------------------------------------
+# PostgreSQL backend tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_config_postgresql():
+    config = MagicMock()
+    config.use_chat_history_enabled = True
+    config.azure_cosmosdb_database = None
+    config.azure_cosmosdb_account = None
+    config.azure_cosmosdb_conversations_container = None
+    config.azure_cosmosdb_enable_feedback = False
+    config.chat_history_backend = "postgresql"
+    config.postgresql_host = "pg-host"
+    config.postgresql_port = 5432
+    config.postgresql_database = "pgdb"
+    config.postgresql_user = "pguser"
+    config.postgresql_password = "pgpass"
+    config.postgresql_enable_feedback = False
+    config.azure_client_id = "test-client-id"
+    config.ai_project_endpoint = "https://test.ai.azure.com"
+    config.ai_project_api_version = "2025-05-01"
+    config.solution_name = "test-solution"
+    config.title_agent_name = "title-agent"
+    return config
+
+
+@pytest.fixture
+def history_service_pg(mock_config_postgresql):
+    with patch("services.history_service.Config", return_value=mock_config_postgresql):
+        with patch("services.history_service.CosmosConversationClient"):
+            with patch("services.history_service.PostgreSQLConversationClient"):
+                service = HistoryService()
+                return service
+
+
+class TestHistoryServicePostgreSQL:
+    def test_init_postgresql_fields(self, history_service_pg, mock_config_postgresql):
+        assert history_service_pg.chat_history_backend == "postgresql"
+        assert history_service_pg.postgresql_host == "pg-host"
+        assert history_service_pg.postgresql_port == 5432
+        assert history_service_pg.postgresql_database == "pgdb"
+        assert history_service_pg.postgresql_user == "pguser"
+        assert history_service_pg.postgresql_password == "pgpass"
+        assert history_service_pg.postgresql_history_enabled is True
+
+    def test_init_postgresql_client_enabled(self, history_service_pg):
+        with patch(
+            "services.history_service.PostgreSQLConversationClient",
+            return_value="pg_client",
+        ):
+            client = history_service_pg.init_postgresql_client()
+        assert client == "pg_client"
+
+    def test_init_postgresql_client_disabled(self, history_service_pg):
+        history_service_pg.postgresql_history_enabled = False
+        client = history_service_pg.init_postgresql_client()
+        assert client is None
+
+    def test_init_postgresql_client_exception(self, history_service_pg):
+        with patch(
+            "services.history_service.PostgreSQLConversationClient",
+            side_effect=Exception("pg error"),
+        ):
+            with pytest.raises(Exception, match="pg error"):
+                history_service_pg.init_postgresql_client()
+
+    def test_get_conversation_client_returns_postgresql(self, history_service_pg):
+        mock_pg_client = MagicMock()
+        with patch.object(
+            history_service_pg, "init_postgresql_client", return_value=mock_pg_client
+        ):
+            client = history_service_pg.get_conversation_client()
+        assert client is mock_pg_client
+
+    def test_get_conversation_client_falls_back_to_cosmos_when_pg_none(
+        self, history_service_pg
+    ):
+        mock_cosmos = MagicMock()
+        with patch.object(
+            history_service_pg, "init_postgresql_client", return_value=None
+        ):
+            with patch.object(
+                history_service_pg, "init_cosmosdb_client", return_value=mock_cosmos
+            ):
+                client = history_service_pg.get_conversation_client()
+        assert client is mock_cosmos
+
+    def test_get_conversation_client_cosmosdb_path(self, history_service_pg):
+        history_service_pg.chat_history_backend = "cosmosdb"
+        mock_cosmos = MagicMock()
+        with patch.object(
+            history_service_pg, "init_cosmosdb_client", return_value=mock_cosmos
+        ):
+            client = history_service_pg.get_conversation_client()
+        assert client is mock_cosmos
+
+    @pytest.mark.asyncio
+    async def test_update_conversation_uses_postgresql(self, history_service_pg):
+        user_id = "user-1"
+        request_json = {
+            "conversation_id": "conv-1",
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi", "id": "msg-a"},
+            ],
+        }
+
+        mock_pg_client = AsyncMock()
+        mock_pg_client.cosmosdb_client = AsyncMock()
+        mock_pg_client.get_conversation = AsyncMock(
+            return_value={"id": "conv-1", "title": "Test", "updatedAt": "2024-01-01"}
+        )
+        mock_pg_client.create_message = AsyncMock(return_value="success")
+
+        with patch.object(
+            history_service_pg, "get_conversation_client", return_value=mock_pg_client
+        ):
+            result = await history_service_pg.update_conversation(user_id, request_json)
+
+        assert result["id"] == "conv-1"
+        mock_pg_client.create_message.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ensure_cosmos_uses_postgresql(self, history_service_pg):
+        mock_pg_client = AsyncMock()
+        mock_pg_client.ensure = AsyncMock(return_value=(True, "ok"))
+
+        with patch.object(
+            history_service_pg, "get_conversation_client", return_value=mock_pg_client
+        ):
+            success, err = await history_service_pg.ensure_cosmos()
+
+        assert success is True
+        mock_pg_client.ensure.assert_awaited_once()
