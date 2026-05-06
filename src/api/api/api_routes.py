@@ -184,6 +184,41 @@ async def get_chart_config():
     return JSONResponse(content={"error": "DISPLAY_CHART_DEFAULT flag not found in environment variables"}, status_code=400)
 
 
+@router.post("/summarize-conversation")
+async def summarize_conversation_endpoint(request: Request):
+    """
+    API endpoint to generate a concise summary of a conversation.
+    Expects a JSON payload with a 'content' field containing the conversation text.
+    """
+    try:
+        request_json = await request.json()
+        content = request_json.get("content", "")
+        logger.info("POST /summarize-conversation called: content_length=%d", len(content) if content else 0)
+
+        if not content or not content.strip():
+            return JSONResponse(content={"error": "content is required"}, status_code=400)
+
+        chat_service = ChatService()
+        summary = await chat_service.summarize_conversation(content)
+        track_event_if_configured("SummarizeConversationSuccess", {"content_length": len(content)})
+        return JSONResponse(content={"summary": summary})
+
+    except Exception as e:
+        logger.exception("Error in summarize_conversation_endpoint: %s", str(e))
+        track_event_if_configured("SummarizeConversationError", {
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+        span = trace.get_current_span()
+        if span is not None:
+            span.record_exception(e)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+        return JSONResponse(
+            content={"error": "An internal error occurred while summarizing the conversation."},
+            status_code=500
+        )
+
+
 @router.post("/fetch-azure-search-content")
 async def fetch_azure_search_content_endpoint(request: Request):
     """

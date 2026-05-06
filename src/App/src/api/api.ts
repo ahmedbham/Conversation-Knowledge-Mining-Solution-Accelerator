@@ -431,6 +431,26 @@ export const historyEnsure = async (): Promise<CosmosDBHealth> => {
   return response;
 };
 
+export const summarizeConversation = async (content: string): Promise<{ summary: string }> => {
+  try {
+    const response = await fetch(`${baseURL}/api/summarize-conversation`, {
+      headers: {
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok) {
+      throw new Error(`Error: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to summarize conversation:", error);
+    throw error;
+  }
+};
+
 export const fetchCitationContent = async (body: any) => {
   try {
     const response = await fetch(`${baseURL}/api/fetch-azure-search-content`, {

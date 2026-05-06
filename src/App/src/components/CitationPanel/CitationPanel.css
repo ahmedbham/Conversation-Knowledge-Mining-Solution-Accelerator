@@ -79,3 +79,61 @@
   .citationPanel::-webkit-scrollbar-thumb:hover {
     background-color: #555;
   }
+
+/* Summarize button */
+.summarize-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 0;
+  padding: 6px 14px;
+  background-color: #0078d4;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.summarize-button:hover:not(:disabled) {
+  background-color: #106ebe;
+}
+
+.summarize-button:disabled {
+  background-color: #a0c4e8;
+  cursor: not-allowed;
+}
+
+/* Summarize result box */
+.summarize-result {
+  margin: 10px 0;
+  padding: 12px;
+  background-color: #f0f6ff;
+  border: 1px solid #c7dff7;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #1b3a57;
+}
+
+.summarize-result-header {
+  font-weight: 700;
+  font-size: 13px;
+  color: #0078d4;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Summarize error */
+.summarize-error {
+  margin: 8px 0;
+  padding: 8px 12px;
+  background-color: #fdf3f3;
+  border: 1px solid #f3c6c6;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #a80000;
+}

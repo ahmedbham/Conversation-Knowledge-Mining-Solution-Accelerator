@@ -802,3 +802,77 @@ class TestChatService:
         error_data = json.loads(chunks[0].strip())
         assert "error" in error_data
         assert "An error occurred while processing the request" in error_data["error"]
+
+
+class TestSummarizeConversation:
+    """Test cases for ChatService.summarize_conversation."""
+
+    @pytest.mark.asyncio
+    @patch("services.chat_service.AzureAIProjectAgentProvider")
+    @patch("services.chat_service.AIProjectClient")
+    @patch("services.chat_service.get_azure_credential_async", new_callable=AsyncMock)
+    async def test_summarize_conversation_success(
+        self, mock_credential, mock_project_client_class, mock_provider_class, chat_service
+    ):
+        """Test successful conversation summarization."""
+        mock_cred = AsyncMock()
+        mock_cred.__aenter__ = AsyncMock(return_value=mock_cred)
+        mock_cred.__aexit__ = AsyncMock(return_value=None)
+        mock_credential.return_value = mock_cred
+
+        mock_project_client = MagicMock()
+        mock_project_client.__aenter__ = AsyncMock(return_value=mock_project_client)
+        mock_project_client.__aexit__ = AsyncMock(return_value=None)
+        mock_project_client_class.return_value = mock_project_client
+
+        mock_agent = MagicMock()
+        mock_result = MagicMock()
+        mock_result.text = "This is a concise summary."
+        mock_agent.run = AsyncMock(return_value=mock_result)
+
+        mock_provider = MagicMock()
+        mock_provider.get_agent = AsyncMock(return_value=mock_agent)
+        mock_provider_class.return_value = mock_provider
+
+        summary = await chat_service.summarize_conversation("Customer: Hi. Agent: Hello, how can I help?")
+
+        assert summary == "This is a concise summary."
+
+    @pytest.mark.asyncio
+    async def test_summarize_conversation_empty_content(self, chat_service):
+        """Test that empty content returns empty string."""
+        result = await chat_service.summarize_conversation("")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_summarize_conversation_whitespace_content(self, chat_service):
+        """Test that whitespace-only content returns empty string."""
+        result = await chat_service.summarize_conversation("   ")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    @patch("services.chat_service.AzureAIProjectAgentProvider")
+    @patch("services.chat_service.AIProjectClient")
+    @patch("services.chat_service.get_azure_credential_async", new_callable=AsyncMock)
+    async def test_summarize_conversation_error_raises_http_exception(
+        self, mock_credential, mock_project_client_class, mock_provider_class, chat_service
+    ):
+        """Test that errors are wrapped in HTTPException."""
+        mock_cred = AsyncMock()
+        mock_cred.__aenter__ = AsyncMock(return_value=mock_cred)
+        mock_cred.__aexit__ = AsyncMock(return_value=None)
+        mock_credential.return_value = mock_cred
+
+        mock_project_client = MagicMock()
+        mock_project_client.__aenter__ = AsyncMock(return_value=mock_project_client)
+        mock_project_client.__aexit__ = AsyncMock(return_value=None)
+        mock_project_client_class.return_value = mock_project_client
+
+        mock_provider = MagicMock()
+        mock_provider.get_agent = AsyncMock(side_effect=Exception("Agent error"))
+        mock_provider_class.return_value = mock_provider
+
+        with pytest.raises(HTTPException) as exc_info:
+            await chat_service.summarize_conversation("Some conversation content.")
+
+        assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
