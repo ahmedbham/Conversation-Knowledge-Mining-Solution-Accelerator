@@ -273,6 +273,46 @@ class ChatService:
 
                     yield ("tool", citation_json)
 
+    async def summarize_conversation(self, content: str) -> str:
+        """
+        Generates a concise summary of the provided conversation content.
+
+        Args:
+            content: The conversation text to summarize.
+
+        Returns:
+            A string containing the summary of the conversation.
+        """
+        if not content or not content.strip():
+            return ""
+
+        logger.info("summarize_conversation called: content_length=%d", len(content))
+
+        summarize_prompt = (
+            f"Please provide a concise summary of the following conversation. "
+            f"Highlight the main topics discussed, key decisions made, "
+            f"and any action items or outcomes:\n\n{content}"
+        )
+
+        try:
+            async with (
+                await get_azure_credential_async(client_id=self.azure_client_id) as credential,
+                AIProjectClient(endpoint=self.ai_project_endpoint, credential=credential) as project_client,
+            ):
+                provider = AzureAIProjectAgentProvider(project_client=project_client)
+                agent = await provider.get_agent(name=self.orchestrator_agent_name)
+                result = await agent.run(summarize_prompt)
+                summary = str(result.text).strip() if result is not None else ""
+                logger.info("summarize_conversation completed: summary_length=%d", len(summary))
+                return summary
+
+        except Exception as e:
+            logger.exception("Error in summarize_conversation: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while summarizing the conversation."
+            ) from e
+
     async def stream_chat_request(self, conversation_id, query, user_id: str = ""):
         """
         Handles streaming chat requests.

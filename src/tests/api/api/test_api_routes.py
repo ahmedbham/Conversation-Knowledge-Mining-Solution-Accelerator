@@ -206,3 +206,46 @@ def test_get_chart_config_env_missing(create_test_client, monkeypatch):
 
     assert response.status_code == 400
     assert "error" in response.json()
+
+
+def test_summarize_conversation_basic(create_test_client):
+    with patch("api.api_routes.ChatService") as MockChatService:
+        mock_instance = MockChatService.return_value
+        mock_instance.summarize_conversation = AsyncMock(return_value="This is a summary.")
+
+        client = create_test_client()
+        payload = {"content": "Customer: Hello. Agent: Hi, how can I help?"}
+        response = client.post("/summarize-conversation", json=payload)
+
+        assert response.status_code == 200
+        assert response.json() == {"summary": "This is a summary."}
+
+
+def test_summarize_conversation_empty_content(create_test_client):
+    client = create_test_client()
+    payload = {"content": ""}
+    response = client.post("/summarize-conversation", json=payload)
+
+    assert response.status_code == 400
+    assert "error" in response.json()
+
+
+def test_summarize_conversation_missing_content(create_test_client):
+    client = create_test_client()
+    response = client.post("/summarize-conversation", json={})
+
+    assert response.status_code == 400
+    assert "error" in response.json()
+
+
+def test_summarize_conversation_error_handling(create_test_client):
+    with patch("api.api_routes.ChatService") as MockChatService:
+        mock_instance = MockChatService.return_value
+        mock_instance.summarize_conversation = AsyncMock(side_effect=Exception("summarization failed"))
+
+        client = create_test_client()
+        payload = {"content": "Customer: Hello. Agent: Hi, how can I help?"}
+        response = client.post("/summarize-conversation", json=payload)
+
+        assert response.status_code == 500
+        assert "error" in response.json()
